@@ -14,6 +14,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.userRouter = void 0;
 const config_1 = require("../config");
+const middleware_1 = require("../middleware");
 const db_1 = __importDefault(require("../utils/db"));
 const express_1 = require("express");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
@@ -25,46 +26,118 @@ exports.userRouter.post("/signup", (req, res) => __awaiter(void 0, void 0, void 
         if (!name || !username || !password) {
             return res.status(400).json({ message: "Invalid request body" });
         }
-        const exisitingUser = yield db_1.default.user.findUnique({
-            where: {
-                username
-            }
-        });
-        if (!exisitingUser) {
-            const newUser = yield db_1.default.user.create({
+        yield db_1.default.$transaction((tx) => __awaiter(void 0, void 0, void 0, function* () {
+            const user = yield tx.user.create({
                 data: {
                     name,
                     username,
-                    password
+                    password,
                 }
             });
-            return res.status(200).json({ message: "User created successfully", data: newUser });
-        }
-        return res.status(400).json({ message: "User already exists" });
+            yield tx.userAccount.create({
+                data: {
+                    userId: user.id
+                }
+            });
+        }));
+        return res.status(200).json({ message: "User created successfully" });
     }
     catch (err) {
         return res.status(500).json({ message: "Internal server error" });
     }
 }));
 exports.userRouter.post("/signin", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    const { username, password } = req.body;
-    if (!username || !password) {
-        return res.status(400).json({ message: "Invalid request body" });
+    try {
+        const { username, password } = req.body;
+        if (!username || !password) {
+            return res.status(400).json({ message: "Invalid request body" });
+        }
+        const user = yield db_1.default.user.findFirst({
+            where: {
+                username,
+                password
+            }
+        });
+        if (!user) {
+            return res.status(403).json({ message: "Unable to find your account" });
+        }
+        if (password !== user.password) {
+            return res.status(403).json({ message: "Invalid Password" });
+        }
+        const token = jsonwebtoken_1.default.sign({
+            id: user.id,
+        }, config_1.JWT_SECRET, { expiresIn: '1h' }); // Add an expiration time
+        return res.status(200).json({ message: "Login successful", token });
     }
-    const user = yield db_1.default.user.findFirst({
+    catch (error) {
+        console.error("Signin error:", error);
+        return res.status(500).json({ message: "Internal server error" });
+    }
+}));
+exports.userRouter.post("/transfer/merchant", middleware_1.userAuthMiddleware, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const { amount, mechantId } = req.body;
+        if (!amount || !mechantId) {
+            return res.status(400).json({ message: "Invalid request body" });
+            // decremenet the user balance
+        }
+    }
+    catch (err) {
+        return res.status(500).json({ message: "Internal server error" });
+    }
+}));
+exports.userRouter.post("/onramp", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { userId, amount } = req.body;
+    const account = yield db_1.default.userAccount.update({
         where: {
-            username,
-            password
+            userId: userId
+        },
+        data: {
+            balance: {
+                increment: amount
+            }
         }
     });
-    if (!user) {
-        return res.status(403).json({ message: "Unable to find your account" });
+    return res.status(200).json({ message: "Onramp successful", data: account });
+}));
+exports.userRouter.post("/transfer", middleware_1.userAuthMiddleware, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    const { merchantId, amount } = req.body;
+    //@ts-ignore
+    const userId = req.id;
+    // very safe basically not double spending
+    const paymentDone = yield db_1.default.$transaction((tx) => __awaiter(void 0, void 0, void 0, function* () {
+        const userAccount = yield tx.userAccount.findFirst({
+            where: {
+                userId: userId
+            }
+        });
+        if (((userAccount === null || userAccount === void 0 ? void 0 : userAccount.balance) || 0) < amount) {
+            return false;
+        }
+        yield tx.userAccount.update({
+            where: {
+                userId: userId
+            },
+            data: {
+                balance: {
+                    decrement: amount
+                }
+            }
+        });
+        yield tx.merchantAccount.update({
+            where: {
+                merchantId
+            },
+            data: {
+                balance: {
+                    increment: amount
+                }
+            }
+        });
+        return true;
+    }));
+    if (paymentDone) {
+        return res.status(200).json({ message: "Payment successful" });
     }
-    if (password != user.password) {
-        return res.status(403).json({ message: "Invalid Password" });
-    }
-    const token = jsonwebtoken_1.default.sign({
-        id: user.id,
-    }, config_1.JWT_SECRET);
-    return res.status(200).json({ message: "Login successful", token });
+    return res.status(403).json({ message: "Insufficient balance" });
 }));

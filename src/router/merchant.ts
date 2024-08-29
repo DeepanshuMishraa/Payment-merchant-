@@ -15,14 +15,8 @@ merchantRouter.post("/signup",async(req,res)=>{
         return res.status(400).json({message:"Invalid request body"});
     }
 
-    const exisitingMerchant = await prisma.merchant.findUnique({
-        where:{
-            username
-        }
-    })
-
-    if(!exisitingMerchant){
-        const newMechant = await prisma.merchant.create({
+    await prisma.$transaction(async tx=>{
+        const merchant = await tx.merchant.create({
             data:{
                 name,
                 username,
@@ -30,9 +24,14 @@ merchantRouter.post("/signup",async(req,res)=>{
             }
         })
 
-        return res.status(200).json({message:"Merchant created successfully",data:newMechant});
-    }
-    return res.status(400).json({message:"Merchant already exists"});
+        await tx.merchantAccount.create({
+            data:{
+                merchantId:merchant.id
+            }
+        })
+    })
+
+        return res.status(200).json({message:"Merchant created successfully"});
     }catch(err){
         return res.status(500).json({message:"Internal server error"});
     }

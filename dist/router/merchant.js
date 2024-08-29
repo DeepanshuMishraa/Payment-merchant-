@@ -25,28 +25,27 @@ exports.merchantRouter.post("/signup", (req, res) => __awaiter(void 0, void 0, v
         if (!name || !username || !password) {
             return res.status(400).json({ message: "Invalid request body" });
         }
-        const exisitingMerchant = yield db_1.default.merchant.findUnique({
-            where: {
-                username
-            }
-        });
-        if (!exisitingMerchant) {
-            const newMechant = yield db_1.default.merchant.create({
+        yield db_1.default.$transaction((tx) => __awaiter(void 0, void 0, void 0, function* () {
+            const merchant = yield tx.merchant.create({
                 data: {
                     name,
                     username,
                     password
                 }
             });
-            return res.status(200).json({ message: "Merchant created successfully", data: newMechant });
-        }
-        return res.status(400).json({ message: "Merchant already exists" });
+            yield tx.merchantAccount.create({
+                data: {
+                    merchantId: merchant.id
+                }
+            });
+        }));
+        return res.status(200).json({ message: "Merchant created successfully" });
     }
     catch (err) {
         return res.status(500).json({ message: "Internal server error" });
     }
 }));
-exports.merchantRouter.post("/login", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+exports.merchantRouter.post("/signin", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const { username, password } = req.body;
     if (!username || !password) {
         return res.status(400).json({ message: "Invalid request body" });
